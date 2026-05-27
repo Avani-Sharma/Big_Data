@@ -13,6 +13,7 @@ table raw              | json_raw
 stream raw             | stream_json_raw
 schema staging         | staging
 staging table          | stg_json_sensor
+task                   | task_load_sensor_data
 */
 -- create database 
 create database if not exists integrate_db;
@@ -184,6 +185,9 @@ from @integrate_db.raw.s3_stage/avanijson/
 select * from integrate_db.raw.json_raw;
 
 
+
+
+
 -- append only stream
 create or replace stream integrate_db.raw.stream_json_raw
 on table integrate_db.raw.json_raw
@@ -297,5 +301,35 @@ select
 from integrate_db.raw.stream_json_raw as s,
 lateral flatten(input => s.raw_payload:sensors) as f;
     
-    
 select * from integrate_db.staging.stg_json_sensor;
+
+
+
+-- create task
+create or replace task integrate_db.staging.task_load_sensor_data
+warehouse = compute_wh
+schedule = '1 minute'
+as
+insert into integrate_db.staging.stg_json_sensor
+select
+    s.raw_payload:event_id::varchar,
+    s.raw_payload:event_type::varchar,
+    s.raw_payload:store_id::varchar,
+    s.raw_payload:store_name::varchar,
+    s.raw_payload:timestamp::timestamp,
+    s.raw_payload:device_id::varchar,
+    s.raw_payload:metadata:firmware::varchar,
+    s.raw_payload:metadata:battery_pct::int,
+    s.raw_payload:metadata:store_floor::int,
+    f.value:sensor::varchar,
+    f.value:value::float,
+    f.value:unit::varchar,
+    current_timestamp()
+from integrate_db.raw.stream_json_raw s,
+lateral flatten(input => s.raw_payload:sensors) f;
+
+
+alter task integrate_db.staging.task_load_sensor_data resume;
+
+select * from integrate_db.staging.stg_json_sensor;
+select count(*)from integrate_db.raw.json_raw;

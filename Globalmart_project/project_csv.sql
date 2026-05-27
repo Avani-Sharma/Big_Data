@@ -1,15 +1,16 @@
 /*
-database = intergrate_db
+database            = intergrate_db
 storage integration = s3_integrations
-external stage = s3_stage
-file format = format_csv
-table = pos_batch_jan
-pipe = pos_batch_jan_pipe
-schema = raw
-table = csv_raw
-table = stream_csv_raw
-schema = staging
-table = stg_csv_transaction
+external stage      = s3_stage
+file format         = format_csv
+table               = pos_batch_jan
+pipe                = pos_batch_jan_pipe
+schema              = raw
+table               = csv_raw
+table               = stream_csv_raw
+schema              = staging
+table               = stg_csv_transaction
+task                = task_load_csv_data
 */
 
 -- create database
@@ -162,8 +163,8 @@ select
     t.$13, t.$14, t.$15, t.$16, t.$17, t.$18, t.$19,
     current_timestamp(),
     metadata$filename
-from @s3_stage/avanicsv/
-(file_format => format_csv) t
+from @integrate_db.raw.s3_stage/avanicsv/
+(file_format => integrate_db.raw.format_csv) t
 );
 
 -- check data
@@ -240,3 +241,63 @@ from raw.stream_csv_raw;
 
 select * from staging.stg_csv_transaction;
 
+
+-- task 
+create or replace task integrate_db.staging.task_load_csv_data
+warehouse = compute_wh
+schedule = '1 minute'
+as
+insert into staging.stg_csv_transaction
+select
+    transaction_id,
+    store_id,
+    store_name,
+    store_city,
+    store_region,
+    cashier_id,
+    customer_id,
+
+    to_timestamp(transaction_date || ' ' || transaction_time) as transaction_ts,
+
+    product_sku,
+    product_name,
+    category,
+    subcategory,
+
+    case when quantity > 0 then quantity else 0 end,
+
+    case when unit_price > 0 then unit_price else 0 end,
+
+    case when discount_pct > 0 then discount_pct else 0 end,
+
+    (
+      (case when quantity > 0 then quantity else 0 end)
+      *
+      (case when unit_price > 0 then unit_price else 0 end)
+    )
+    -
+    (
+      (
+       (case when quantity > 0 then quantity else 0 end)
+       *
+       (case when unit_price > 0 then unit_price else 0 end)
+      )
+      *
+      (case when discount_pct > 0 then discount_pct else 0 end)
+      / 100
+    ) as line_total,
+
+    case
+        when lower(payment_method) = 'credit card' then 'cc'
+        when lower(payment_method) = 'debit card' then 'dc'
+        else payment_method
+    end as payment_method,
+    loyalty_points,
+    current_timestamp()
+from raw.stream_csv_raw;
+
+
+alter task integrate_db.staging.task_load_csv_data resume;
+
+select * from staging.stg_csv_transaction;
+select count(*) from staging.stg_csv_transaction;
